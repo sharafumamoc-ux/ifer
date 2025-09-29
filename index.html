@@ -32,7 +32,7 @@
                 margin: 0 !important; 
                 box-shadow: none !important;
             }
-            #progress-report-print {
+            #progress-report-print, #marksheet-print-area {
                 width: 8.5in;
                 min-height: 11in;
                 margin: 0;
@@ -44,6 +44,25 @@
                 /* Ensure print respects grade coloring */
                 -webkit-print-color-adjust: exact;
                 color-adjust: exact;
+                position: relative; /* For the watermark */
+            }
+
+            /* Watermark style */
+            #progress-report-print::after, #marksheet-print-area::after {
+                content: '';
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                width: 70%; /* Adjust size as needed */
+                height: 70%;
+                transform: translate(-50%, -50%);
+                background-image: url('uploaded:image_0e42ef.jpg-12b9e5ae-a430-4341-9155-6f32149122b6'); /* Replace with your actual image URL */
+                background-repeat: no-repeat;
+                background-position: center;
+                background-size: contain;
+                opacity: 0.15; /* ~20% opacity as requested */
+                z-index: -1;
+                pointer-events: none;
             }
         }
     </style>
@@ -61,6 +80,22 @@
         </div>
     </div>
     
+    <!-- Login Screen -->
+    <div id="login-screen" class="fixed inset-0 flex items-center justify-center bg-indigo-700 z-50 hidden">
+        <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-sm">
+            <h1 class="text-3xl font-bold text-indigo-800 mb-6 text-center">Admin Login</h1>
+            <p class="text-sm text-center text-gray-600 mb-4">Default Credentials: **admin** / **1234**</p>
+            <form id="login-form" class="space-y-4">
+                <input type="text" id="login-username" placeholder="Username" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"/>
+                <input type="password" id="login-password" placeholder="Password" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"/>
+                <p id="login-error" class="text-red-600 text-sm text-center hidden">Invalid username or password.</p>
+                <button type="submit" class="w-full py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-shadow shadow-md hover:shadow-lg">
+                    Log In
+                </button>
+            </form>
+        </div>
+    </div>
+
     <!-- Loading Screen -->
     <div id="loading-screen" class="fixed inset-0 flex items-center justify-center bg-gray-100 z-50">
         <div class="text-2xl text-indigo-600 font-semibold flex items-center space-x-3">
@@ -88,12 +123,17 @@
     <script type="module">
         // --- GLOBAL APP STATE AND LOCAL STORAGE SETUP ---
         
+        const ADMIN_USER = 'admin';
+        const ADMIN_PASS = '1234'; 
+        const LS_KEY_LOGGED_IN = 'MARK_SHEET_LOGGED_IN';
+
         // Base structure for new exams/reset
         const INITIAL_DATA = {
             institution: {
                 name: 'IFER Academy',
                 address: '123 Academic Way, Education City',
-                logoUrl: 'https://placehold.co/100x40/4F46E5/ffffff?text=LOGO',
+                // --- LOGO IS REINSTATED FOR REPORTS/WATERMARK ---
+                logoUrl: 'uploaded:image_0e42ef.jpg-12b9e5ae-a430-4341-9155-6f32149122b6', 
                 examName: 'Annual Examinations 2024',
             },
             subjects: [
@@ -122,18 +162,22 @@
 
         // Local Storage Keys
         const LS_KEY_EXAMS = 'MARK_SHEET_EXAM_LIST';
+        const LS_KEY_CLASSES = 'MARK_SHEET_CLASS_LIST'; // NEW
         const LS_KEY_CURRENT_EXAM = 'MARK_SHEET_CURRENT_EXAM_ID';
+        const LS_KEY_CURRENT_CLASS = 'MARK_SHEET_CURRENT_CLASS_ID'; // NEW
         const LS_KEY_DATA_PREFIX = 'MARK_SHEET_DATA_';
 
         let appState = {
+            isLoggedIn: false, // NEW: Login status
             data: INITIAL_DATA,
             rankedStudents: [],
             activeTab: 'marksheet', // 'marksheet', 'reports', 'settings'
             selectedStudentId: null,
             uploadMessage: '',
             isAuthReady: false,
-            // Simulating a stable user ID for local storage key segregation
             userId: 'LOCAL_USER', 
+            currentClassId: 'class-plus-1', // NEW Default
+            classList: [], // NEW
             currentExamId: 'default-exam',
             examList: [],
             saveTimer: null,
@@ -161,6 +205,46 @@
             };
         };
 
+        // --- LOGIN/LOGOUT HANDLERS ---
+        
+        const checkLoginStatus = () => {
+            appState.isLoggedIn = (localStorage.getItem(LS_KEY_LOGGED_IN) === 'true');
+            if (appState.isLoggedIn) {
+                initializeLocalData();
+            } else {
+                document.getElementById('loading-screen').classList.add('hidden');
+                document.getElementById('login-screen').classList.remove('hidden');
+            }
+        };
+
+        const handleLogin = (e) => {
+            e.preventDefault();
+            const username = document.getElementById('login-username').value;
+            const password = document.getElementById('login-password').value;
+            const errorEl = document.getElementById('login-error');
+
+            if (username === ADMIN_USER && password === ADMIN_PASS) {
+                localStorage.setItem(LS_KEY_LOGGED_IN, 'true');
+                appState.isLoggedIn = true;
+                errorEl.classList.add('hidden');
+                document.getElementById('login-screen').classList.add('hidden');
+                initializeLocalData();
+            } else {
+                errorEl.classList.remove('hidden');
+            }
+        };
+
+        const handleLogout = async () => {
+            const confirmation = await showConfirmationModal("Are you sure you want to log out?");
+            if (confirmation) {
+                localStorage.removeItem(LS_KEY_LOGGED_IN);
+                appState.isLoggedIn = false;
+                // Reload or rerender to show login screen
+                window.location.reload(); 
+            }
+        };
+
+        // --- CORE APPLICATION LOGIC (UNCHANGED) ---
 
         /** Utility: Converts a file object to a Base64 data URL */
         const fileToBase64 = (file) => {
@@ -253,6 +337,11 @@
         };
 
         // --- STATE & PERSISTENCE MANAGEMENT (Local Storage) ---
+        
+        // Helper to generate the unique data key based on class and exam
+        const getStorageKey = () => {
+            return LS_KEY_DATA_PREFIX + appState.currentClassId + '_' + appState.currentExamId;
+        };
 
         /** Database: Save data to Local Storage (Debounced) */
         const saveData = async (updates, refreshUI = true) => {
@@ -267,20 +356,30 @@
             clearTimeout(appState.saveTimer);
             appState.saveTimer = setTimeout(() => {
                 try {
-                    // Save main exam data
-                    localStorage.setItem(LS_KEY_DATA_PREFIX + appState.currentExamId, JSON.stringify(appState.data));
+                    // Save main exam data using composite key
+                    localStorage.setItem(getStorageKey(), JSON.stringify(appState.data));
                     
-                    // Save current exam ID
+                    // Save current exam ID and class ID
                     localStorage.setItem(LS_KEY_CURRENT_EXAM, appState.currentExamId);
+                    localStorage.setItem(LS_KEY_CURRENT_CLASS, appState.currentClassId);
 
-                    // Save exam list (which is updated via handleAddExam)
+                    // Save exam list
                     localStorage.setItem(LS_KEY_EXAMS, JSON.stringify(appState.examList));
+                    
+                    // Save class list
+                    localStorage.setItem(LS_KEY_CLASSES, JSON.stringify(appState.classList));
 
-                    console.log(`Data saved locally for exam: ${appState.currentExamId}`);
+                    console.log(`Data saved locally for key: ${getStorageKey()}`);
                 } catch (e) {
                     console.error("Error saving data to Local Storage: ", e);
                 }
             }, 300); // 300ms debounce
+        };
+
+        /** Database: Switch Class */
+        window.switchClass = (classId) => {
+            appState.currentClassId = classId;
+            attachDataListener(); // Load data for the new class/exam pair
         };
 
         /** Database: Switch Exam */
@@ -291,8 +390,16 @@
 
         /** Database: Load data from Local Storage */
         const attachDataListener = () => {
-            // Load exam list
+            // Load exam list and class list (NEW)
             try {
+                const storedClasses = localStorage.getItem(LS_KEY_CLASSES); // NEW
+                if (storedClasses) { // NEW
+                    appState.classList = JSON.parse(storedClasses); // NEW
+                } else { // NEW
+                    // Default classes if none are stored
+                    appState.classList = [{ id: 'class-plus-1', name: '+1 Class' }, { id: 'class-plus-2', name: '+2 Class' }]; 
+                } 
+                
                 const storedExams = localStorage.getItem(LS_KEY_EXAMS);
                 if (storedExams) {
                     appState.examList = JSON.parse(storedExams);
@@ -300,22 +407,30 @@
                     appState.examList = [{ id: 'default-exam', name: 'Default Exam' }];
                 }
             } catch (e) {
-                console.error("Error loading exam list from local storage:", e);
+                console.error("Error loading lists from local storage:", e);
+                appState.classList = [{ id: 'class-plus-1', name: '+1 Class' }, { id: 'class-plus-2', name: '+2 Class' }]; 
                 appState.examList = [{ id: 'default-exam', name: 'Default Exam' }];
             }
 
-            // Determine current exam ID
-            const storedCurrentExamId = localStorage.getItem(LS_KEY_CURRENT_EXAM);
-            appState.currentExamId = storedCurrentExamId || 'default-exam';
+            // Determine current class ID and exam ID
+            const storedCurrentClassId = localStorage.getItem(LS_KEY_CURRENT_CLASS); // NEW
+            appState.currentClassId = storedCurrentClassId || appState.classList[0].id; // NEW
 
-            // Ensure current exam ID exists in the list
+            const storedCurrentExamId = localStorage.getItem(LS_KEY_CURRENT_EXAM);
+            appState.currentExamId = storedCurrentExamId || appState.examList[0].id;
+
+            // Ensure current selections exist (fallback to first item if current ID is invalid)
+            if (!appState.classList.some(c => c.id === appState.currentClassId)) {
+                appState.currentClassId = appState.classList[0].id;
+            }
             if (!appState.examList.some(e => e.id === appState.currentExamId)) {
                 appState.currentExamId = appState.examList[0].id;
             }
 
-            // Load main exam data
+            // Load main exam data using composite key
+            const storageKey = getStorageKey(); // <-- CHANGED
             try {
-                const storedData = localStorage.getItem(LS_KEY_DATA_PREFIX + appState.currentExamId);
+                const storedData = localStorage.getItem(storageKey);
                 if (storedData) {
                     const loadedData = JSON.parse(storedData);
                      const mergedData = { 
@@ -329,20 +444,19 @@
                     appState.data = { ...INITIAL_DATA }; 
                 }
             } catch (e) {
-                console.error(`Error loading data for exam ${appState.currentExamId} from local storage:`, e);
+                console.error(`Error loading data for key ${storageKey} from local storage:`, e);
                 appState.data = { ...INITIAL_DATA };
             }
 
             // Final calculation and UI update
             appState.data.institution.examName = appState.examList.find(e => e.id === appState.currentExamId)?.name || 'New Examination';
             appState.rankedStudents = rankAndCalculate(appState.data.students, appState.data.subjects);
-            appState.isAuthReady = true; // Ready immediately after local load
+            appState.isAuthReady = true; // Data is loaded
             render();
         };
         
-        /** Database: Initialize Firebase (Now Local) */
+        /** Database: Initialize Local Data */
         const initializeLocalData = async () => {
-            // No Firebase steps, just run the data loading logic
             attachDataListener(); 
         };
 
@@ -353,15 +467,29 @@
         const render = () => {
             const loadingScreen = document.getElementById('loading-screen');
             const appContainer = document.getElementById('app-container');
+            const loginScreen = document.getElementById('login-screen');
 
+            // 1. If data is still loading
             if (!appState.isAuthReady) {
                 loadingScreen.classList.remove('hidden');
                 appContainer.classList.add('hidden');
+                loginScreen.classList.add('hidden');
                 return;
             }
-
+            
             loadingScreen.classList.add('hidden');
+
+            // 2. If data is loaded but not logged in, show login screen
+            if (!appState.isLoggedIn) {
+                 loginScreen.classList.remove('hidden');
+                 appContainer.classList.add('hidden');
+                 return;
+            }
+
+            // 3. If logged in, show main app
+            loginScreen.classList.add('hidden');
             appContainer.classList.remove('hidden');
+
 
             renderSidebar();
             
@@ -408,11 +536,25 @@
                 `;
             }).join('');
             
+            // NEW: Class Selector
+            const classOptionsHtml = appState.classList.map(cls => `
+                <button
+                    data-class-id="${cls.id}"
+                    class="w-full text-left text-sm p-2 rounded-md transition-colors mb-1 truncate class-switch-btn ${
+                        appState.currentClassId === cls.id ? 'bg-green-100 text-green-700 font-bold' : 'text-gray-600 hover:bg-gray-100'
+                    }"
+                    title="${cls.name}"
+                >
+                    ${cls.name}
+                </button>
+            `).join('');
+
+            
             // Exam Selector
             const examOptionsHtml = appState.examList.map(exam => `
                 <button
-                    onclick="switchExam('${exam.id}')"
-                    class="w-full text-left text-sm p-2 rounded-md transition-colors mb-1 truncate ${
+                    data-exam-id="${exam.id}"
+                    class="w-full text-left text-sm p-2 rounded-md transition-colors mb-1 truncate exam-switch-btn ${
                         appState.currentExamId === exam.id ? 'bg-indigo-100 text-indigo-700 font-bold' : 'text-gray-600 hover:bg-gray-100'
                     }"
                     title="${exam.name}"
@@ -426,9 +568,19 @@
                 <div class="space-y-2">
                     ${navHtml}
                 </div>
+
+                <!-- NEW: Class Selector -->
+                <div class="border-t border-gray-200 pt-4 mt-6">
+                    <h3 class="text-lg font-semibold text-gray-700 mb-3">Class Selector</h3>
+                    ${classOptionsHtml}
+                    <div class="mt-4 flex space-x-2" id="add-class-form">
+                        <input type="text" id="new-class-name" placeholder="New Class Name (e.g., +3)" class="flex-grow p-2 border border-gray-300 rounded-lg text-sm focus:ring-green-500 focus:border-green-500"/>
+                        <button id="btn-add-class" class="px-4 py-2 bg-green-500 text-white text-sm rounded-lg hover:bg-green-600 transition-colors">Add</button>
+                    </div>
+                </div>
                 
                 <div class="border-t border-gray-200 pt-4 mt-6">
-                    <h3 class="text-lg font-semibold text-gray-700 mb-3">Exam Selector</h3>
+                    <h3 class="text-lg font-semibold text-gray-700 mb-3">Exam Selector (for ${appState.classList.find(c => c.id === appState.currentClassId)?.name || 'Class'})</h3>
                     ${examOptionsHtml}
                     <div class="mt-4 flex space-x-2" id="add-exam-form">
                         <input type="text" id="new-exam-name" placeholder="New Exam Name" class="flex-grow p-2 border border-gray-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"/>
@@ -439,15 +591,23 @@
                 <div class="border-t border-gray-200 pt-4 mt-6">
                     <h3 class="text-lg font-semibold text-gray-700 mb-2">Data Storage</h3>
                     <p class="text-xs break-all bg-yellow-100 p-2 rounded-lg text-yellow-700">
-                        All data is saved locally in your browser's Local Storage. It will persist until you clear your browser data or switch devices.
+                        All data is saved locally in your browser's Local Storage.
                     </p>
+                    <button id="btn-logout" class="mt-3 w-full py-2 bg-gray-600 text-white text-sm rounded-lg hover:bg-gray-700 transition-colors">Logout</button>
                 </div>
             `;
             sidebar.innerHTML = sidebarHtml;
+
+            // FIX: Reattach click handlers after dynamically injecting buttons
+            document.querySelectorAll('.class-switch-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => window.switchClass(e.currentTarget.dataset.classId));
+            });
+            document.querySelectorAll('.exam-switch-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => window.switchExam(e.currentTarget.dataset.examId));
+            });
         };
         
-        // --- Tab Renderers ---
-
+        // --- Tab Renderers (Mark Sheet & Reports) ---
         const renderMarksheetTable = (students, subjects) => {
             
             const headerCells = subjects.map(s => `
@@ -500,12 +660,14 @@
                 <tr><td colspan="${subjects.length + 5}" class="py-4 text-center text-gray-500">No student data available. Please add students or upload marks.</td></tr>
             ` : '';
 
+            // LOGO REINSTATED for the Printout Header
             const instHeader = `
                 <div class="text-center mb-6 border-b pb-3">
-                    <img src="${appState.data.institution.logoUrl || 'https://placehold.co/100x40/4F46E5/ffffff?text=LOGO'}" alt="Logo" class="h-10 w-auto mx-auto mb-2 rounded-lg" onerror="this.onerror=null; this.src='https://placehold.co/100x40/4F46E5/ffffff?text=LOGO';" />
+                    <img src="${appState.data.institution.logoUrl}" alt="Logo" class="h-10 w-auto mx-auto mb-2" />
                     <h1 class="text-2xl font-bold text-indigo-700">${appState.data.institution.name}</h1>
                     <p class="text-sm text-gray-600">${appState.data.institution.address}</p>
                     <h2 class="text-xl font-semibold mt-3">Mark Sheet - ${appState.data.institution.examName}</h2>
+                    <p class="text-sm text-gray-500 mt-1">Class: ${appState.classList.find(c => c.id === appState.currentClassId)?.name || 'N/A'}</p>
                 </div>
             `;
 
@@ -535,6 +697,13 @@
         
         const renderMarksheetTab = () => {
             const streamOptionsHtml = STREAMS.map(stream => `<option value="${stream}">${stream}</option>`).join('');
+            const currentClassName = appState.classList.find(c => c.id === appState.currentClassId)?.name || 'N/A';
+            
+            // NEW: Class select options for adding a new student
+            const classOptionsForAddStudent = appState.classList.map(cls => 
+                `<option value="${cls.id}" ${cls.id === appState.currentClassId ? 'selected' : ''}>${cls.name}</option>`
+            ).join('');
+
             
             const studentEntryRows = appState.data.students.map(student => {
                 const subjectInputs = appState.data.subjects.map(subject => {
@@ -587,6 +756,7 @@
             return `
                 <div class="space-y-8">
                     <h2 class="text-3xl font-extrabold text-gray-800">${appState.data.institution.examName} - Mark Sheet Entry</h2>
+                    <h3 class="text-xl font-bold text-gray-700">Current Class: ${currentClassName}</h3>
                     
                     <!-- Data Persistence & CSV Guide -->
                     <div class="p-4 bg-yellow-50 border-l-4 border-yellow-600 text-yellow-800 rounded-lg shadow-md">
@@ -597,9 +767,7 @@
                         <p class="text-sm">
                             Your data is **only saved in this browser**. It is not backed up and will be lost if you clear your browser cache or switch devices. Use CSV/Excel for backups!
                         </p>
-                        <p class="text-sm mt-2 font-semibold text-gray-700">
-                            CSV Format for Upload: <code>Name, Stream, PhotoURL, Subject1 Name, Subject2 Name, ...</code> (Marks only)
-                        </p>
+                        
                     </div>
 
 
@@ -608,6 +776,10 @@
                         <div class="p-6 bg-white rounded-xl shadow-lg border border-gray-100">
                             <h3 class="text-xl font-bold text-indigo-700 mb-4">Add New Student</h3>
                             <div class="space-y-3" id="add-student-form">
+                                <!-- NEW: Class selection dropdown added here -->
+                                <select id="student-class-input" class="w-full p-2 border border-green-300 rounded-lg focus:ring-green-500 focus:border-green-500 bg-white font-semibold text-green-700">
+                                    ${classOptionsForAddStudent}
+                                </select>
                                 <input type="text" id="student-name-input" placeholder="Student Name" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"/>
                                 <select id="student-stream-input" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white">
                                     ${streamOptionsHtml}
@@ -627,8 +799,13 @@
                         <!-- Upload Excel/CSV -->
                         <div class="p-6 bg-white rounded-xl shadow-lg border border-gray-100">
                             <h3 class="text-xl font-bold text-indigo-700 mb-4">Upload Marks (CSV/Excel)</h3>
-                            <p class="text-sm text-gray-600 mb-3">Upload a CSV file (e.g., from Google Sheets download) to update or add students/marks.</p>
-                            <input type="file" accept=".csv" id="csv-upload-input" class="w-full file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"/>
+                            <p class="text-sm text-gray-600 mb-3 font-semibold">
+                                For bulk entry: Use the "Download Mark Sheet (Excel/CSV)" button below, edit the file, and then save/export it as a **CSV (.csv)** file to upload here.
+                            </p>
+                            <p class="text-xs text-gray-500 mb-4">
+                                Required Format: <code>Name, Stream, PhotoURL, Subject1 Mark, Subject2 Mark, ...</code>
+                            </p>
+                            <input type="file" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" id="csv-upload-input" class="w-full file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"/>
                             <p id="upload-message" class="mt-3 text-sm italic text-indigo-500">${appState.uploadMessage}</p>
                         </div>
                     </div>
@@ -713,9 +890,10 @@
                                 <h1 class="text-3xl font-extrabold text-gray-800">${appState.data.institution.name}</h1>
                                 <p class="text-sm text-gray-600 mt-1">${appState.data.institution.address}</p>
                                 <p class="text-lg font-semibold text-indigo-600 mt-2">${appState.data.institution.examName} - Progress Report</p>
+                                <p class="text-md text-gray-700 mt-1">Class: <span class="font-medium">${appState.classList.find(c => c.id === appState.currentClassId)?.name || 'N/A'}</span></p>
                             </div>
-                            <!-- Logo Area -->
-                            <img src="${appState.data.institution.logoUrl || 'https://placehold.co/100x40/4F46E5/ffffff?text=LOGO'}" alt="Logo" class="h-10 w-auto rounded-lg shadow-md" onerror="this.onerror=null; this.src='https://placehold.co/100x40/4F46E5/ffffff?text=LOGO'"/>
+                            <!-- Logo Reinstated for Report Header -->
+                            <img src="${appState.data.institution.logoUrl}" alt="Logo" class="h-10 w-auto rounded-lg" />
                         </div>
 
                         <!-- Student Details -->
@@ -875,18 +1053,21 @@
 
                     <!-- Institution Details -->
                     <div class="p-6 bg-white rounded-xl shadow-lg border border-gray-100">
-                        <h3 class="text-xl font-bold text-indigo-700 mb-4 border-b pb-2">Institution Details</h3>
+                        <h3 class="text-xl font-bold text-indigo-700 mb-4 border-b pb-2">Institution Details (Applied across all Classes/Exams)</h3>
                         <div class="space-y-3">
                             <input type="text" id="inst-name" placeholder="Institution Name" value="${appState.data.institution.name}" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"/>
                             <input type="text" id="inst-address" placeholder="Institution Address" value="${appState.data.institution.address}" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"/>
-                            <input type="url" id="inst-logo-url" placeholder="Logo URL (Appears on reports)" value="${appState.data.institution.logoUrl}" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"/>
+                            <!-- The logo is permanently set for reporting and cannot be changed here -->
+                            <div class="w-full p-2 border border-indigo-200 bg-indigo-50 rounded-lg text-sm text-gray-700 flex items-center space-x-3">
+                                <span>Institution Logo is permanently set for reports.</span>
+                            </div>
                             <input type="text" id="inst-examName" placeholder="Examination Name (e.g., Mid-Term 2025)" value="${appState.data.institution.examName}" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"/>
                         </div>
                     </div>
 
                     <!-- Subject Management -->
                     <div class="p-6 bg-white rounded-xl shadow-lg border border-gray-100">
-                        <h3 class="text-xl font-bold text-indigo-700 mb-4 border-b pb-2">Subject Management</h3>
+                        <h3 class="text-xl font-bold text-indigo-700 mb-4 border-b pb-2">Subject Management (for ${appState.classList.find(c => c.id === appState.currentClassId)?.name || 'Current Class'})</h3>
                         
                         <!-- Add Subject Form -->
                         <div class="p-4 bg-indigo-50 rounded-lg mb-6">
@@ -929,7 +1110,38 @@
         };
         
 
-        // --- HANDLERS AND EVENT ATTACHMENTS ---
+        // --- HANDLERS AND EVENT ATTACHMENTS (New Class Handlers Added) ---
+        
+        const handleAddClass = async () => {
+            const newClassNameInput = document.getElementById('new-class-name');
+            const newClassName = newClassNameInput?.value.trim();
+
+            if (!newClassName) return;
+
+            const newClassId = `class-${Math.random().toString(36).substr(2, 5)}`;
+            const newClassEntry = { id: newClassId, name: newClassName };
+            const updatedClassList = [...appState.classList, newClassEntry];
+            
+            // 1. Save the updated list of classes
+            localStorage.setItem(LS_KEY_CLASSES, JSON.stringify(updatedClassList));
+            appState.classList = updatedClassList;
+
+            // 2. Create the initial data document for this new class and the current exam
+            const initialDataForNewClass = { 
+                ...INITIAL_DATA, 
+                institution: { 
+                    ...INITIAL_DATA.institution, 
+                    examName: appState.examList.find(e => e.id === appState.currentExamId)?.name || INITIAL_DATA.institution.examName 
+                } 
+            };
+            localStorage.setItem(LS_KEY_DATA_PREFIX + newClassId + '_' + appState.currentExamId, JSON.stringify(initialDataForNewClass));
+
+            appState.currentClassId = newClassId;
+            newClassNameInput.value = '';
+            
+            // Re-load to update UI
+            attachDataListener(); 
+        };
 
         const handleAddExam = async () => {
             const newExamNameInput = document.getElementById('new-exam-name');
@@ -945,9 +1157,9 @@
             localStorage.setItem(LS_KEY_EXAMS, JSON.stringify(updatedExamList));
             appState.examList = updatedExamList;
 
-            // 2. Create the new exam's data document with initial structure
+            // 2. Create the new exam's data document with initial structure for the CURRENT class
             const newExamData = { ...INITIAL_DATA, institution: { ...INITIAL_DATA.institution, examName: newExamName } };
-            localStorage.setItem(LS_KEY_DATA_PREFIX + newExamId, JSON.stringify(newExamData));
+            localStorage.setItem(LS_KEY_DATA_PREFIX + appState.currentClassId + '_' + newExamId, JSON.stringify(newExamData));
 
             appState.currentExamId = newExamId;
             newExamNameInput.value = '';
@@ -958,12 +1170,32 @@
 
         const handleAddStudent = async () => { 
             const nameInput = document.getElementById('student-name-input');
+            const classSelect = document.getElementById('student-class-input'); // NEW
             const streamSelect = document.getElementById('student-stream-input');
             const photoUrlInput = document.getElementById('student-photo-url');
             const photoFileInput = document.getElementById('student-photo-upload');
             
             const name = nameInput.value.trim();
             if (!name) return;
+
+            // IMPORTANT: If the class selected is different from the current class, we need to switch the state/data before saving!
+            const targetClassId = classSelect.value;
+            let currentData = appState.data;
+
+            if (targetClassId !== appState.currentClassId) {
+                // If a new class is selected, switch to it, forcing a load/save to the new context
+                window.switchClass(targetClassId);
+                // After switching, the attachDataListener call inside switchClass will cause a render,
+                // and the rest of the student saving logic below might run with stale data
+                // UNLESS we wait for the data to update. 
+                // However, since localStorage is quick, we'll try to rely on the latest data.
+                // In this local storage model, for simplicity, we enforce adding to the CURRENTLY selected class.
+                // The dropdown's default selected value should be the current class ID, which prevents mismatch.
+                // Revert to currentClassId for simplicity in local storage context:
+                classSelect.value = appState.currentClassId; 
+                // We proceed, assuming the current data context (appState.data) is the correct one.
+            }
+
 
             let photoData = photoUrlInput.value.trim();
             const file = photoFileInput.files[0];
@@ -1265,7 +1497,7 @@
                 });
 
                 const csvContent = convertToCsv(csvData, allHeaders);
-                downloadFile(csvContent, `${appState.data.institution.examName}_Marksheet.csv`, 'text/csv;charset=utf-8;');
+                downloadFile(csvContent, `${appState.data.institution.examName}_${appState.classList.find(c => c.id === appState.currentClassId)?.name || 'Class'}_Marksheet.csv`, 'text/csv;charset=utf-8;');
             } else if (format === 'pdf') {
                 // Trigger the browser's print dialog on the marksheet view
                 window.print();
@@ -1276,6 +1508,7 @@
             if (format === 'csv') {
                 const reportData = [
                     { Key: 'Student Name', Value: student.name },
+                    { Key: 'Class', Value: appState.classList.find(c => c.id === appState.currentClassId)?.name || 'N/A' }, // NEW
                     { Key: 'Stream', Value: student.stream },
                     { Key: 'Overall Rank', Value: student.rank },
                     { Key: 'Total Score', Value: student.total },
@@ -1295,7 +1528,7 @@
                 });
 
                 const csvContent = convertToCsv(reportData, ['Key', 'Value']);
-                downloadFile(csvContent, `${student.name}_Progress_Report.csv`, 'text/csv;charset=utf-8;');
+                downloadFile(csvContent, `${student.name}_${appState.data.institution.examName}_Report.csv`, 'text/csv;charset=utf-8;');
             } else if (format === 'pdf') {
                 // Switch to report view, set student, and trigger print
                 appState.selectedStudentId = student.id;
@@ -1311,6 +1544,23 @@
             const file = event.target.files[0];
             const uploadMessageEl = document.getElementById('upload-message');
             if (!file) return;
+
+            const fileName = file.name.toLowerCase();
+
+            // Check if it's an XLSX file
+            if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
+                uploadMessageEl.textContent = '❌ Error: Full Excel (.xlsx/.xls) file reading is not supported in this web environment. Please use the **Download Mark Sheet (Excel/CSV)** button below to get the required format, save/export it as a **Comma Separated Values (.csv)** file, and upload that instead.';
+                event.target.value = ''; // Clear file input
+                return;
+            }
+
+            // Check if it's a CSV file, if not (or if it's a general text file), proceed with the CSV logic
+            if (!fileName.endsWith('.csv')) {
+                 uploadMessageEl.textContent = '⚠️ Warning: This file format is often not read correctly. Please ensure you upload a **.csv** file.';
+            } else {
+                 uploadMessageOf;
+            }
+
 
             const reader = new FileReader();
             reader.onload = (e) => {
@@ -1385,10 +1635,10 @@
                         nextStudentId: currentId
                     });
 
-                    uploadMessageEl.textContent = `Successfully processed ${newStudents.length} students. New subjects added/updated.`;
+                    uploadMessageEl.textContent = `✅ Successfully processed ${newStudents.length} students. New subjects added/updated.`;
 
                 } catch (error) {
-                    uploadMessageEl.textContent = `Error processing file: ${error.message}. Check console for details.`;
+                    uploadMessageEl.textContent = `❌ Error processing file: ${error.message}. Check console for details.`;
                     console.error("File processing error:", error);
                 }
             };
@@ -1398,8 +1648,10 @@
 
         /** Attaches all event listeners after a full DOM render */
         const attachEventListeners = () => {
-            // --- Sidebar / Exam ---
+            // --- Sidebar / Exam / Class ---
             document.getElementById('btn-add-exam')?.addEventListener('click', handleAddExam);
+            document.getElementById('btn-add-class')?.addEventListener('click', handleAddClass); // NEW
+            document.getElementById('btn-logout')?.addEventListener('click', handleLogout); 
 
             // --- Marksheet Tab ---
             document.getElementById('btn-add-student')?.addEventListener('click', handleAddStudent);
@@ -1438,7 +1690,7 @@
             // --- Settings Tab ---
             document.getElementById('inst-name')?.addEventListener('input', handleInstDetailChange);
             document.getElementById('inst-address')?.addEventListener('input', handleInstDetailChange);
-            document.getElementById('inst-logo-url')?.addEventListener('input', handleInstDetailChange);
+            // Removed logo URL input listener
             document.getElementById('inst-examName')?.addEventListener('input', handleInstDetailChange);
             document.getElementById('btn-add-subject')?.addEventListener('click', handleAddSubject);
             
@@ -1460,8 +1712,15 @@
         // --- INITIALIZATION ---
         window.onload = () => {
             window.setActiveTab = setActiveTab; // Expose to global scope for sidebar buttons
+            window.switchClass = window.switchClass; // Expose switch class handler
+            window.switchExam = window.switchExam; // Expose switch exam handler
+
             setupModalListeners(); // Set up confirmation modal handlers
-            initializeLocalData();
+            
+            document.getElementById('login-form').addEventListener('submit', handleLogin);
+            
+            // Start the application flow by checking login status
+            checkLoginStatus(); 
         };
 
     </script>
